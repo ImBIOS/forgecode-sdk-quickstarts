@@ -34,7 +34,7 @@ Capability          Provider (default)         Requires
 ─────────────────   ─────────────────────────  ────────────────────────────────────
 Text generation     forge agent (SDK)          forge CLI binary
 Image understanding MiniMax MCP (manual setup) uvx, MINIMAX_API_HOST, MINIMAX_API_KEY
-Browser control     Playwright MCP             npx, @playwright/mcp
+Browser control     Playwright MCP             pnpx, @playwright/mcp
 Code execution      forge agent (built-in)     —
 ```
 
@@ -110,7 +110,7 @@ for await (const msg of query(prompt, {
 ### 2.2 ForgeCode SDK (`@imbios/forgecode-sdk`)
 
 **Package:** `@imbios/forgecode-sdk`
-**Install:** `bun add @imbios/forgecode-sdk`
+**Install:** `pnpm add @imbios/forgecode-sdk`
 **Requirements:** Bun >= 1.0.0, `forge` CLI binary installed
 
 **Core API:**
@@ -252,16 +252,15 @@ forgecode-sdk-quickstarts/
 **Modality:** Text-to-text only. No images involved — knowledge base is plain text/JSON.
 
 **Dependencies:** `@imbios/forgecode-sdk`, `express`, `readline` (built-in)
+**Dependencies:** `@imbios/forgecode-sdk` (no extra HTTP or readline deps — `Bun.serve()` and `Bun.stdin` are built-in)
 
 **Implementation steps:**
-
-1. Create `package.json` with `bun` scripts
-2. Load knowledge base from `data/knowledge-base.json` in `knowledge-base.ts`
+1. Create `package.json` from the quickstart template (pnpm + oxlint/oxfmt scripts)
+2. Load knowledge base from `data/knowledge-base.json` via `Bun.file().json()`
 3. Build `systemPrompt` that injects KB content
 4. In `agent.ts`, wrap `query()` to track `conversationId` for session continuity
-5. Implement readline REPL in `index.ts` that calls agent and streams responses
-6. Add optional Express HTTP mode with SSE for browser testing
-
+5. Implement readline REPL in `index.ts` using `Bun.stdin` line iteration
+6. Add optional HTTP chat endpoint via `Bun.serve()` with streaming `Response` (no express)
 ---
 
 ### 4.2 `financial-data-analyst`
@@ -270,32 +269,31 @@ forgecode-sdk-quickstarts/
 
 **TypeScript adaptation with ForgeCode SDK:**
 
-- Load CSV/JSON financial data and inject as context in the prompt
+**TypeScript adaptation with ForgeCode SDK:**
+- Load CSV/JSON financial data and inject as context in the prompt using `Bun.file()`
 - Use ForgeCode's structured output (`outputFormat` + Zod) to request JSON chart specs
-- Render charts using Chart.js in an Express-served HTML frontend
-- Stream analysis text via SSE
+- Render charts using Chart.js in a `Bun.serve()`-served HTML frontend (HTML imports)
+- Stream analysis text via native `ReadableStream` / `Response` streaming
 
 **Key files:**
 
 | File | Purpose |
 |---|---|
-| `src/data-loader.ts` | Parse CSV/JSON datasets using `papaparse` or native `fs` |
+| `src/data-loader.ts` | Parse CSV/JSON datasets using `Bun.file()` + built-in text splitting (no papaparse) |
 | `src/agent.ts` | `query()` with data context injected in prompt, Zod schema for chart spec output |
-| `src/index.ts` | Express server: `POST /analyze` streams agent response, `GET /` serves HTML UI |
-| `src/public/index.html` | Chart.js frontend consuming SSE stream |
+| `src/index.ts` | `Bun.serve()` server: `POST /analyze` streams agent response, `GET /` serves HTML UI |
+| `src/public/index.html` | Chart.js frontend consuming the streamed response |
 
 **Modality:** Text-to-text only. Raw CSV/JSON data is stringified and injected as text context. Chart rendering is client-side (Chart.js) from a JSON spec; no image is ever sent to the model.
 
-**Dependencies:** `@imbios/forgecode-sdk`, `express`, `papaparse`, `zod`
+**Dependencies:** `@imbios/forgecode-sdk`, `zod` (no express, no papaparse — Bun built-ins cover both)
 
 **Implementation steps:**
-
-1. Implement CSV loader in `data-loader.ts` (summary stats + raw data slice injected as prompt context)
+1. Implement CSV loader in `data-loader.ts` using `Bun.file().text()` + manual line splitting
 2. Define Zod schema for chart spec output (`{ type, labels, datasets, title }`)
 3. In `agent.ts`, call `query()` with data context and `outputFormat` for structured chart JSON
-4. Build Express server with SSE endpoint that pipes `assistant` message chunks
-5. Build Chart.js HTML frontend that receives chart spec and renders it
-
+4. Build server in `index.ts` with `Bun.serve()`: `POST /analyze` returns a streaming `Response`, `GET /` serves `index.html` via HTML import
+5. Build Chart.js `index.html` + `frontend.ts` (Bun bundles automatically via HTML imports)
 ---
 
 ### 4.3 `browser-use-demo`
@@ -332,7 +330,7 @@ forgecode-sdk-quickstarts/
 | `src/agent.ts` | `query()` with browser task system prompt + `mcpServers: [playwrightMcp, minimaxMcpServer]` |
 | `src/index.ts` | CLI: accept a task string, run the agent, print result |
 
-**Dependencies:** `@imbios/forgecode-sdk`, `playwright`, `@playwright/mcp`
+**Dependencies:** `@imbios/forgecode-sdk`, `playwright` (pnpm add playwright; `pnpx @playwright/mcp` invoked at runtime — not installed as a dep)
 
 **Implementation steps:**
 
@@ -505,8 +503,7 @@ Centralized MCP server definitions. Any quickstart that needs vision imports fro
 - MiniMax MCP is **not auto-installed** — `uvx` fetches `minimax-coding-plan-mcp` on first run
 
 ```typescript
-import { config } from "dotenv";
-config();
+// No dotenv import — Bun automatically loads .env files
 
 /**
  * MiniMax MCP — default image-to-text provider.
@@ -526,8 +523,8 @@ export const minimaxMcpServer = {
 /** Playwright MCP — browser control tools */
 export const playwrightMcpServer = {
   name: "playwright",
-  command: "npx",
-  args: ["-y", "@playwright/mcp"],
+  command: "pnpx",
+  args: ["@playwright/mcp"],
 };
 
 /**
@@ -572,42 +569,131 @@ export function requireImageMcp() {
 Utilities for collecting streamed output and printing to terminal:
 
 ```typescript
+// Collect all assistant tokens into a single string
 export async function collectText(gen: AsyncGenerator): Promise<string>
-export function printStream(gen: AsyncGenerator): Promise<string>
-export function sseTransform(gen: AsyncGenerator): ReadableStream  // for Express SSE
+
+// Print tokens to stdout as they arrive
+export async function printStream(gen: AsyncGenerator): Promise<string>
+
+// Convert agent stream to a native ReadableStream for Bun.serve() Response
+// Usage: return new Response(agentToStream(gen), { headers: { "Content-Type": "text/plain" } })
+export function agentToStream(gen: AsyncGenerator): ReadableStream<Uint8Array>
 ```
 
-### 5.4 Root `package.json` (Bun workspaces)
+> No SSE helper needed — `Bun.serve()` accepts a `ReadableStream` directly as a `Response` body.
+
+### 5.4 Root `package.json` (pnpm workspaces)
 
 ```json
 {
   "name": "forgecode-sdk-quickstarts",
-  "workspaces": [
-    "customer-support-agent",
-    "financial-data-analyst",
-    "browser-use-demo",
-    "autonomous-coding",
-    "agents",
-    "computer-use-demo",
-    "computer-use-best-practices",
-    "shared"
-  ]
+  "private": true,
+  "scripts": {
+    "lint": "pnpm -r run lint",
+    "fmt": "pnpm -r run fmt",
+    "fmt:check": "pnpm -r run fmt:check"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "^11.1.2",
+      "onFail": "download"
+    }
+  }
 }
 ```
 
-### 5.5 `tsconfig.json` (shared base)
+Workspace members are declared in `pnpm-workspace.yaml`:
+
+```yaml
+# pnpm-workspace.yaml
+packages:
+  - "shared"
+  - "customer-support-agent"
+  - "financial-data-analyst"
+  - "browser-use-demo"
+  - "autonomous-coding"
+  - "agents"
+  - "computer-use-demo"
+  - "computer-use-best-practices"
+```
+
+### 5.5 Per-package `package.json` template
+
+Every quickstart package follows the template established in `quickstart-template/package.json`:
+
+```json
+{
+  "name": "<quickstart-name>",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "module": "src/index.ts",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check"
+  },
+  "dependencies": {
+    "@imbios/forgecode-sdk": "latest"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "oxfmt": "^0.51.0",
+    "oxlint": "^1.66.0",
+    "typescript": "^5"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "^11.1.2",
+      "onFail": "download"
+    }
+  }
+}
+```
+
+### 5.6 `tsconfig.json` (per-package, matches template)
 
 ```json
 {
   "compilerOptions": {
+    "lib": ["ESNext"],
     "target": "ESNext",
-    "module": "ESNext",
+    "module": "Preserve",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "allowJs": true,
+    "types": ["bun"],
+
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+
     "strict": true,
-    "noEmit": true
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noPropertyAccessFromIndexSignature": false
   }
 }
 ```
+
+Key differences from default configs:
+- `"module": "Preserve"` — Bun's recommended module setting (not `"ESNext"`)
+- `"moduleDetection": "force"` — treats every file as a module
+- `"types": ["bun"]` — Bun global types; no `@types/node` needed
+- `"verbatimModuleSyntax": true` — enforces `import type` for type-only imports
+- `"allowImportingTsExtensions": true` — allows `import "./foo.ts"` directly
 
 ---
 
@@ -618,7 +704,7 @@ export function sseTransform(gen: AsyncGenerator): ReadableStream  // for Expres
 | 1 | `agents` | Text only | Core SDK patterns; foundational for all others |
 | 2 | `customer-support-agent` | Text only | Simplest full-stack demo; no external vision deps |
 | 3 | `autonomous-coding` | Text only | Best natural fit for ForgeCode (coding agent) |
-| 4 | `financial-data-analyst` | Text only | Adds structured output + Express + Chart.js frontend |
+| 4 | `financial-data-analyst` | Text only | Adds structured output + `Bun.serve()` + Chart.js frontend |
 | 5 | `browser-use-demo` | Text + MiniMax MCP (visual fallback) | Playwright MCP + MiniMax MCP for screenshot reading |
 | 6 | `computer-use-demo` | Text + MiniMax MCP | MiniMax MCP bridges screenshot → text description |
 | 7 | `computer-use-best-practices` | Text + MiniMax MCP | Same bridge + pruning/caching/batching patterns |
@@ -627,16 +713,22 @@ export function sseTransform(gen: AsyncGenerator): ReadableStream  // for Expres
 
 ## 7. Environment Setup
 
-### Prerequisites
+### 7.1 Prerequisites
 
 ```bash
-# 1. Install Bun
+# 1. Install Bun (runtime)
 curl -fsSL https://bun.sh/install | bash
 
-# 2. Install forge CLI
+# 2. Install pnpm (package manager)
+curl -fsSL https://get.pnpm.io/install.sh | sh
+# or: npm install -g pnpm
+
+# 3. Install forge CLI
 curl -fsSL https://forgecode.dev/cli | sh
 
-# 3. Verify installation
+# 4. Verify
+bun --version
+pnpm --version
 forge --version
 ```
 
@@ -677,17 +769,16 @@ MINIMAX_API_HOST=https://api.minimax.io  # default; override if using a differen
 ### 7.4 Per-project setup pattern
 
 Text-only quickstarts (priorities 1–4):
-
+Text-only quickstarts (priorities 1–4):
 ```bash
-bun install
+pnpm install
 cp .env.example .env    # only FORGE_PATH needed
 bun run src/index.ts
 ```
 
 Vision quickstarts (priorities 5–7, require MiniMax MCP):
-
 ```bash
-bun install
+pnpm install
 cp .env.example .env    # set FORGE_PATH + MINIMAX_API_KEY + MINIMAX_API_HOST
 cp .mcp.json.example .mcp.json  # fill in MINIMAX_API_KEY
 bun run src/index.ts
@@ -695,6 +786,7 @@ bun run src/index.ts
 
 Quickstarts that require MiniMax MCP call `requireImageMcp()` at startup and throw a descriptive error if `MINIMAX_API_KEY` is missing, rather than failing silently mid-run.
 
+> **Package manager vs runtime split:** `pnpm` manages dependencies (`pnpm install`, `pnpm add`). `bun` runs the code (`bun run src/index.ts`, `bun test`). Never use `bun install` or `npm install`.
 ---
 
 ## 8. Key Compatibility Notes
@@ -710,6 +802,11 @@ Quickstarts that require MiniMax MCP call `requireImageMcp()` at startup and thr
 | **Tool loops are internal** | ForgeCode agent handles tool invocations internally. You observe `tool_use` events but don't dispatch tool results manually. |
 | **Session ID ≠ Anthropic session** | `conversationId` is ForgeCode's session identifier, not an Anthropic session ID. |
 | **Binary dependency** | The `forge` CLI must be installed on the host machine. This is a hard requirement for all quickstarts. |
+| **PNPM for packages, Bun for runtime** | `pnpm install` / `pnpm add` for dependency management. `bun run` / `bun test` for execution. Never mix — `bun install` is not used. |
+| **No express** | Use `Bun.serve()` for HTTP servers. It supports routes, streaming responses, WebSockets, and HTML imports natively. |
+| **No dotenv** | Bun automatically loads `.env` files. Never `import { config } from "dotenv"`. |
+| **No papaparse / node:fs readFile** | Use `Bun.file().text()` or `Bun.file().json()` for file I/O. Use `bun:sqlite` for SQLite. |
+| **oxlint + oxfmt** | All packages use `oxlint` for linting and `oxfmt` for formatting. No ESLint or Prettier. Run `pnpm run lint` and `pnpm run fmt`. |
 | **Bun runtime** | The TypeScript SDK is optimized for Bun. Node.js compatibility is not guaranteed by the SDK. |
 | **Streaming** | `assistant` messages are individual tokens; accumulate them for full text. |
 | **Structured output** | Use `outputFormat` + Zod schemas instead of Claude's JSON mode / `tool_use` schema workaround. |
@@ -721,7 +818,9 @@ Quickstarts that require MiniMax MCP call `requireImageMcp()` at startup and thr
 
 Each quickstart is considered complete when:
 
-- [ ] TypeScript compiles without errors (`bun run typecheck`)
+- [ ] TypeScript compiles without errors (`bun run typecheck` or `tsc --noEmit`)
+- [ ] No lint errors (`pnpm run lint`)
+- [ ] Code is formatted (`pnpm run fmt:check`)
 - [ ] The application runs with `bun run src/index.ts`
 - [ ] Agent responses stream in real-time to terminal or HTTP client
 - [ ] Session continuity works (follow-up questions are coherent)
