@@ -814,7 +814,88 @@ Quickstarts that require MiniMax MCP call `requireImageMcp()` at startup and thr
 
 ---
 
-## 9. Verification Criteria
+## 9. Open Questions (resolve before implementation starts)
+
+| # | Question | Why it matters |
+|---|---|---|
+| Q1 | Does `QueryOptions` include `mcpServers`? | Used in 3 quickstarts; need fallback plan if absent |
+| Q2 | Does `QueryOptions` include `outputFormat` + Zod integration? | Used in `financial-data-analyst` and `computer-use-*` |
+| Q3 | Does `@nut-tree/nut-js` run under Bun? | Native addon package; may need Node.js compatibility shim |
+| Q4 | Does `screenshot-desktop` run under Bun? | Same concern — native binary wrapper |
+| Q5 | Does `simple-git` run under Bun? | Uses `child_process` — likely fine, but confirm |
+| Q6 | What model name to use as default? | `claude-opus-4-5` is in the plan; `claude-sonnet-4-5` may be better for quickstarts (cost + speed) |
+| Q7 | Should `shared/` have a root `tsconfig.json` with project references? | Needed for `tsc --noEmit` to work correctly across the monorepo |
+
+---
+
+## 10. Growth Strategy — 1K Stars in a Week
+
+### 10.1 Why this repo can go viral
+
+This repo has structural advantages that map directly to GitHub trending mechanics:
+
+- **First-mover:** No TypeScript-native quickstarts repo exists for ForgeCode SDK yet
+- **Coattail effect:** Anthropic's `claude-quickstarts` already has thousands of stars; this is a direct TypeScript port of a known, popular resource
+- **Stack alignment:** Bun + pnpm + TypeScript + oxlint is the exact stack the current TypeScript community gravitates toward in 2026
+- **MCP angle:** MCP is a hot topic — any repo prominently featuring MCP integration gets organic search traffic
+
+### 10.2 Pre-launch checklist (technical)
+
+These must be done before any public announcement:
+
+- [ ] Every quickstart runs with a single command (`bun run src/index.ts`)
+- [ ] Root-level `README.md` with a demo GIF or asciinema recording for each quickstart
+- [ ] `AGENTS.md` at repo root (forge agents read this; it signals the repo is forge-native)
+- [ ] `.devcontainer/devcontainer.json` — one-click GitHub Codespaces launch (zero local setup)
+- [ ] GitHub Actions CI: `pnpm install && pnpm run typecheck && pnpm run lint`
+- [ ] Issue + PR templates in `.github/`
+- [ ] `CONTRIBUTING.md` — makes it easy for others to add new quickstarts
+- [ ] Each quickstart has a demo screenshot or GIF in its own `README.md`
+- [ ] `awesome-claude` submission prepared (PR draft ready)
+
+### 10.3 Launch sequence
+
+**Day 0 (prep):**
+- Record a 60-second screen recording showing all 7 quickstarts running
+- Prepare a thread for each platform — write, don't improvise
+
+**Day 1 (launch):**
+1. Post to **Hacker News** as `Show HN: TypeScript quickstarts for ForgeCode SDK — Bun-native, MCP-first` — submit between 09:00–11:00 US Eastern for maximum visibility
+2. Post a **Twitter/X thread** tagging `@anthropic`, `@imbIOS` (ForgeCode), `@bunjavascript`, `@pnpmjs` — include the asciinema demo
+3. Post to **r/LocalLLaMA**, **r/typescript**, **r/MachineLearning** — different angles per subreddit
+
+**Day 2–3 (amplification):**
+4. Submit to **awesome-anthropic** and **awesome-claude** lists via PR
+5. Write a `dev.to` article: _"Building AI agents with TypeScript, Bun, and ForgeCode SDK"_ — link back to the repo
+6. Post in **Anthropic Discord** `#community-projects` channel and relevant TypeScript Discord servers
+
+**Day 4–7 (maintenance window):**
+7. Respond to every issue within 24h — GitHub's trending algorithm favors active repos
+8. Merge community PRs quickly (typo fixes, new quickstarts) — activity signals compound
+9. Pin the repo to your GitHub profile
+
+### 10.4 Content hooks by platform
+
+| Platform | Angle |
+|---|---|
+| Hacker News | "No Python required" + Bun runtime performance numbers |
+| Twitter/X | Demo GIF + "7 AI agent patterns, TypeScript-native, runs with one command" |
+| Reddit r/LocalLLaMA | MCP-first design — swap any model, swap any image MCP |
+| Reddit r/typescript | Bun + oxlint + oxfmt stack; `verbatimModuleSyntax`; modern TypeScript setup |
+| Dev.to / Medium | Tutorial-style walkthrough of `autonomous-coding` (most impressive demo) |
+| Discord (Anthropic) | "Port of claude-quickstarts in TypeScript using ForgeCode SDK" |
+
+### 10.5 Repo surface-area optimisations
+
+- **Topics/tags on GitHub:** `typescript`, `bun`, `anthropic`, `claude`, `ai-agents`, `mcp`, `forgecode`, `llm`, `computer-use`, `playwright`
+- **Homepage URL:** link to the ForgeCode SDK docs or forgecode.dev
+- **Social preview image:** a clean screenshot showing multiple quickstarts running with the ForgeCode + Anthropic logos
+- **Star prompt in README:** _"If this saved you time, a ⭐ helps others find it"_ — one line, not aggressive
+- **`used-by` section in README:** once a few projects adopt it, list them — social proof accelerates stars
+
+---
+
+## 11. Verification Criteria
 
 Each quickstart is considered complete when:
 
