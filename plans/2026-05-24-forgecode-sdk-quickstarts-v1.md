@@ -69,9 +69,10 @@ The `forge` CLI auto-reads `.mcp.json` from the project root. This is the same f
 When calling `query()` programmatically, MCP servers are passed via the `mcpServers` option. The shared config reads keys from environment variables:
 
 ```typescript
-// shared/mcp-config.ts
-export const minimaxMcpServer = {
-  name: "MiniMax",
+// shared/mcp-config.ts — McpServerConfig has NO name field; mcpServers is a Record
+import type { McpServerConfig } from "@imbios/forgecode-sdk";
+
+export const minimaxMcpServer: McpServerConfig = {
   command: "uvx",
   args: ["minimax-coding-plan-mcp"],
   env: {
@@ -81,12 +82,19 @@ export const minimaxMcpServer = {
 };
 
 // Usage in any quickstart that needs vision:
-import { query } from "@imbios/forgecode-sdk";
-import { minimaxMcpServer } from "../shared/mcp-config";
+import { query, type ForgeConfig } from "@imbios/forgecode-sdk";
+import { minimaxMcpServer } from "../shared/mcp-config.ts";
 
-for await (const msg of query(prompt, {
-  mcpServers: [minimaxMcpServer],  // loaded before the run
-})) { ... }
+const forgeConfig: ForgeConfig = {
+  openaiUrl: "https://api.minimax.io/v1",
+  openaiApiKey: process.env.MINIMAX_API_KEY!,
+  model: "MiniMax-M2.7",
+};
+
+for await (const msg of query(
+  { prompt, options: { mcpServers: { MiniMax: minimaxMcpServer } } },
+  forgeConfig
+)) { ... }
 ```
 
 > Users may replace `minimaxMcpServer` with any MCP-compatible vision provider by updating `shared/mcp-config.ts` and the corresponding `.mcp.json`.
@@ -113,33 +121,79 @@ for await (const msg of query(prompt, {
 **Install:** `pnpm add @imbios/forgecode-sdk`
 **Requirements:** Bun >= 1.0.0, `forge` CLI binary installed
 
-**Core API:**
+**Core API (verified from source):**
 
 ```typescript
-import { query } from "@imbios/forgecode-sdk";
+import { query, type QueryOptions, type ForgeConfig } from "@imbios/forgecode-sdk";
 
-for await (const message of query(prompt, options?)) {
+// query({ prompt, options? }, config?)  — first arg is an object, NOT (prompt, options)
+for await (const message of query({ prompt, options }, minimaxForgeConfig)) {
   switch (message.type) {
-    case "system":    // session_id and metadata
-    case "assistant": // streamed response tokens (message.content)
-    case "tool_use":  // agent invoking a tool
-    case "result":    // final result (message.result)
-    case "error":     // error (message.error)
+    case "system":    // { session_id } — emitted on init
+    case "assistant": // { content } — streamed token
+    case "tool_use":  // { name, arguments } — tool invocation
+    case "result":    // { result, session_id } — final output
+    case "error":     // { error, exitCode? }
   }
 }
 ```
 
-**`QueryOptions` interface:**
+**`QueryOptions` interface (verified from `types.ts`):**
 
 | Option | Type | Description |
 |---|---|---|
-| `agent` | `string` | Agent name (default: `"forge"`) |
-| `model` | `string` | Model to use |
+| `agent` | `string` | Agent name (e.g. `"forge"`, `"sage"`) |
+| `model` | `string` | Model name → `FORGE_MODEL` env var |
 | `maxTurns` | `number` | Maximum conversation turns |
-| `conversationId` | `string` | Continue an existing conversation (session) |
-| `systemPrompt` | `string` | Custom system prompt |
-| `env` | `Record<string, string>` | Environment variables |
-| `outputFormat` | `OutputFormat` | Structured output configuration (Zod schema) |
+| `conversationId` | `string` | Resume a session (`--conversation-id`) |
+| `systemPrompt` | `string` | Prepended to user prompt |
+| `env` | `Record<string, string \| undefined>` | Extra env vars for forge process |
+| `outputFormat` | `OutputFormat` | Structured output (`{ type: "json_schema", z: ZodSchema }`) |
+| `mcpServers` | `Record<string, McpServerConfig>` | MCP servers to import before the run |
+| `sandbox` | `string` | Named git worktree (`--sandbox`) |
+| `cwd` | `string` | Working directory |
+| `reasoningEffort` | `ReasoningEffort` | `"none"` \| … \| `"max"` |
+| `allowedTools` | `string[]` | Restrict tools the agent may use |
+| `abortController` | `AbortController` | Cancel mid-run |
+| `stderr` | `(data: string) => void` | Stderr callback |
+
+> **`mcpServers` is a Record, not an array:**
+> ```typescript
+> // CORRECT
+> mcpServers: { MiniMax: minimaxMcpServer, playwright: playwrightMcpServer }
+> // WRONG — arrays are not accepted
+> mcpServers: [minimaxMcpServer]
+> ```
+
+**`McpServerConfig` (verified from `types.ts`) — no `name` field:**
+
+```typescript
+interface McpServerConfig {
+  command: string;            // e.g. "uvx"
+  args?: string[];            // e.g. ["minimax-coding-plan-mcp"]
+  transport?: "stdio" | "sse"; // default: "stdio"
+  env?: Record<string, string | undefined>;
+}
+```
+
+**`ForgeConfig` (second arg to `query()`) — sets model + API credentials:**
+
+```typescript
+interface ForgeConfig {
+  forgePath?: string;    // explicit forge binary path
+  openaiUrl?: string;    // → OPENAI_URL (OpenAI-compat base URL)
+  openaiApiKey?: string; // → OPENAI_API_KEY
+  model?: string;        // → FORGE_MODEL
+  reasoningEffort?: ReasoningEffort;
+}
+
+// Connecting to MiniMax-M2.7:
+const minimaxForgeConfig: ForgeConfig = {
+  openaiUrl: "https://api.minimax.io/v1",  // OpenAI-compat, /v1 required
+  openaiApiKey: process.env.MINIMAX_API_KEY!,
+  model: "MiniMax-M2.7",
+};
+```
 
 **Binary resolution order:**
 
@@ -364,14 +418,21 @@ This is the most natural fit for ForgeCode SDK since `forge` is specifically a c
 
 **Modality:** Text-to-text only. The coding agent reads and writes source files as text; no image input at any step.
 
-**Dependencies:** `@imbios/forgecode-sdk`, `simple-git`
+**Dependencies:** `@imbios/forgecode-sdk` (no `simple-git` — use `Bun.$` for git commands)
 
 **Implementation steps:**
 
 1. Implement `initializer.ts`: send a structured prompt to create project scaffold + write feature list to `FEATURES.md`
 2. Implement `coder.ts`: parse `FEATURES.md`, loop features, call `query()` with feature description, commit on completion
 3. Use `conversationId` from the first turn to maintain context across feature iterations
-4. Implement `git-helpers.ts` using `simple-git` for clean git operations
+4. Implement `git-helpers.ts` using `Bun.$` shell template literals — no npm dependency needed:
+   ```typescript
+   // git-helpers.ts
+   export async function commitFeature(name: string) {
+     await Bun.$`git add .`;
+     await Bun.$`git commit -m ${"feat: " + name}`;
+   }
+   ```
 5. CLI entry point with `--init` / `--build` flags
 
 ---
@@ -480,15 +541,28 @@ Same MiniMax MCP screenshot-to-text bridge as `computer-use-demo`, plus:
 A configured wrapper around `query()` with project-wide defaults:
 
 ```typescript
-import { query, type QueryOptions } from "@imbios/forgecode-sdk";
+import { query, type QueryOptions, type ForgeConfig } from "@imbios/forgecode-sdk";
+
+/** Default model: MiniMax-M2.7 via OpenAI-compatible endpoint. */
+export const defaultForgeConfig: ForgeConfig = {
+  openaiUrl: process.env.MINIMAX_API_HOST
+    ? `${process.env.MINIMAX_API_HOST}/v1`
+    : "https://api.minimax.io/v1",
+  openaiApiKey: process.env.MINIMAX_API_KEY!,
+  model: "MiniMax-M2.7",
+};
 
 export const defaultOptions: Partial<QueryOptions> = {
   agent: "forge",
-  model: "claude-opus-4-5",
 };
 
-export async function* forgeQuery(prompt: string, opts: Partial<QueryOptions> = {}) {
-  yield* query(prompt, { ...defaultOptions, ...opts });
+export async function* forgeQuery(
+  prompt: string,
+  opts: Partial<QueryOptions> = {},
+  config: ForgeConfig = defaultForgeConfig,
+) {
+  // First arg is { prompt, options }, NOT (prompt, options)
+  yield* query({ prompt, options: { ...defaultOptions, ...opts } }, config);
 }
 ```
 
@@ -504,14 +578,15 @@ Centralized MCP server definitions. Any quickstart that needs vision imports fro
 
 ```typescript
 // No dotenv import — Bun automatically loads .env files
+import type { McpServerConfig } from "@imbios/forgecode-sdk";
 
 /**
  * MiniMax MCP — default image-to-text provider.
  * Package: minimax-coding-plan-mcp (fetched via uvx on first use)
  * Manual setup required: uvx + MINIMAX_API_KEY env var.
+ * McpServerConfig has NO `name` field — the key in the Record IS the name.
  */
-export const minimaxMcpServer = {
-  name: "MiniMax",
+export const minimaxMcpServer: McpServerConfig = {
   command: "uvx",
   args: ["minimax-coding-plan-mcp"],
   env: {
@@ -520,9 +595,8 @@ export const minimaxMcpServer = {
   },
 };
 
-/** Playwright MCP — browser control tools */
-export const playwrightMcpServer = {
-  name: "playwright",
+/** Playwright MCP — browser control tools. `pnpx` not `npx`. */
+export const playwrightMcpServer: McpServerConfig = {
   command: "pnpx",
   args: ["@playwright/mcp"],
 };
@@ -532,7 +606,7 @@ export const playwrightMcpServer = {
  * Throws if required env vars are not set, so callers fail fast
  * rather than silently hitting the MCP with an empty key.
  */
-export function requireImageMcp() {
+export function requireImageMcp(): McpServerConfig {
   if (!process.env.MINIMAX_API_KEY) {
     throw new Error(
       "MINIMAX_API_KEY is required for image-to-text features.\n"
@@ -542,6 +616,10 @@ export function requireImageMcp() {
   }
   return minimaxMcpServer;
 }
+
+// Usage: pass as Record key in QueryOptions.mcpServers
+// mcpServers: { MiniMax: minimaxMcpServer }
+// mcpServers: { MiniMax: minimaxMcpServer, playwright: playwrightMcpServer }
 ```
 
 **Companion `.mcp.json.example`** (commit this; users copy to `.mcp.json` and fill in their key):
@@ -755,32 +833,32 @@ cp .mcp.json.example .mcp.json
 ```bash
 # .env (root — inherited by all workspaces)
 
-# Required for all quickstarts
-FORGE_PATH=~/.local/bin/forge          # path to forge binary (if not on PATH)
-
-# Required only for quickstarts that use MiniMax MCP (browser-use, computer-use-*)
+# Required for all quickstarts — default model is MiniMax-M2.7
 MINIMAX_API_KEY=your_minimax_api_key
-MINIMAX_API_HOST=https://api.minimax.io  # default; override if using a different region
+MINIMAX_API_HOST=https://api.minimax.io  # default; override for different region
 
-# Optional — swap the image MCP provider
-# MCP_IMAGE_PROVIDER=custom
+# Required only for quickstarts that use MiniMax MCP for vision (browser-use, computer-use-*)
+# (same key as above, referenced separately for clarity)
+# MINIMAX_API_KEY is also read by the MCP server via .mcp.json env block
+
+# Optional — path to forge binary if not on PATH
+FORGE_PATH=~/.local/bin/forge
 ```
 
 ### 7.4 Per-project setup pattern
 
-Text-only quickstarts (priorities 1–4):
-Text-only quickstarts (priorities 1–4):
+All quickstarts (text-only, priorities 1–4):
 ```bash
 pnpm install
-cp .env.example .env    # only FORGE_PATH needed
+cp .env.example .env    # set MINIMAX_API_KEY (required — default model is MiniMax-M2.7)
 bun run src/index.ts
 ```
 
-Vision quickstarts (priorities 5–7, require MiniMax MCP):
+Vision quickstarts (priorities 5–7, also require MiniMax MCP):
 ```bash
 pnpm install
-cp .env.example .env    # set FORGE_PATH + MINIMAX_API_KEY + MINIMAX_API_HOST
-cp .mcp.json.example .mcp.json  # fill in MINIMAX_API_KEY
+cp .env.example .env    # set MINIMAX_API_KEY + MINIMAX_API_HOST
+cp .mcp.json.example .mcp.json  # fill in MINIMAX_API_KEY for forge CLI MCP auto-load
 bun run src/index.ts
 ```
 
@@ -793,6 +871,7 @@ Quickstarts that require MiniMax MCP call `requireImageMcp()` at startup and thr
 
 | Concern | Notes |
 |---|---|
+| **Default model: MiniMax-M2.7** | Set via `ForgeConfig.openaiUrl = "https://api.minimax.io/v1"` + `model: "MiniMax-M2.7"`. `MINIMAX_API_KEY` is required for **all** quickstarts — not just vision ones — because this is the inference model. |
 | **No raw `anthropic` client** | The ForgeCode SDK does NOT expose `client.messages.create()`. All calls go through `query()`. |
 | **Text-to-text default** | No quickstart passes image bytes to the main model. Vision is always delegated to MiniMax MCP (or a user-provided substitute). |
 | **MiniMax MCP is not built-in** | Must be manually set up: install `uvx`, copy `.mcp.json.example` → `.mcp.json`, set `MINIMAX_API_KEY`. |
@@ -808,23 +887,30 @@ Quickstarts that require MiniMax MCP call `requireImageMcp()` at startup and thr
 | **No papaparse / node:fs readFile** | Use `Bun.file().text()` or `Bun.file().json()` for file I/O. Use `bun:sqlite` for SQLite. |
 | **oxlint + oxfmt** | All packages use `oxlint` for linting and `oxfmt` for formatting. No ESLint or Prettier. Run `pnpm run lint` and `pnpm run fmt`. |
 | **Bun runtime** | The TypeScript SDK is optimized for Bun. Node.js compatibility is not guaranteed by the SDK. |
+| **No simple-git** | Use `Bun.$` shell template literals for git operations (`Bun.$\`git add .\``, etc.). No npm dependency needed. |
+| **`mcpServers` is a Record** | `QueryOptions.mcpServers` is `Record<string, McpServerConfig>`, not an array. Use `{ MiniMax: minimaxMcpServer }`, not `[minimaxMcpServer]`. |
+| **`McpServerConfig` has no `name`** | The Record key IS the server name. Do not add a `name` field to the config object. |
+| **`query()` first arg is an object** | Correct: `query({ prompt, options }, forgeConfig)`. Wrong: `query(prompt, options)`. |
+| **`ForgeConfig` is the second arg** | Model, API URL, and API key are passed as the second argument to `query()`, not inside `QueryOptions`. |
 | **Streaming** | `assistant` messages are individual tokens; accumulate them for full text. |
 | **Structured output** | Use `outputFormat` + Zod schemas instead of Claude's JSON mode / `tool_use` schema workaround. |
 | **MCP swap** | Update `minimaxMcpServer` in `shared/mcp-config.ts` and the matching `.mcp.json` entry to point to any other vision-capable MCP server. |
 
 ---
 
-## 9. Open Questions (resolve before implementation starts)
+## 9. Resolved Questions
 
-| # | Question | Why it matters |
+All questions from the pre-research phase are now resolved. The table below documents the findings.
+
+| # | Question | Resolution |
 |---|---|---|
-| Q1 | Does `QueryOptions` include `mcpServers`? | Used in 3 quickstarts; need fallback plan if absent |
-| Q2 | Does `QueryOptions` include `outputFormat` + Zod integration? | Used in `financial-data-analyst` and `computer-use-*` |
-| Q3 | Does `@nut-tree/nut-js` run under Bun? | Native addon package; may need Node.js compatibility shim |
-| Q4 | Does `screenshot-desktop` run under Bun? | Same concern — native binary wrapper |
-| Q5 | Does `simple-git` run under Bun? | Uses `child_process` — likely fine, but confirm |
-| Q6 | What model name to use as default? | `claude-opus-4-5` is in the plan; `claude-sonnet-4-5` may be better for quickstarts (cost + speed) |
-| Q7 | Should `shared/` have a root `tsconfig.json` with project references? | Needed for `tsc --noEmit` to work correctly across the monorepo |
+| Q1 | Does `QueryOptions` include `mcpServers`? | **Yes** — verified from `types.ts`. Type is `Record<string, McpServerConfig>` (not an array). |
+| Q2 | Does `QueryOptions` include `outputFormat` + Zod integration? | **Yes** — `outputFormat: OutputFormat` is in `QueryOptions`; `OutputFormat` supports `{ type: "json_schema", z: ZodSchema }`. |
+| Q3 | Does `@nut-tree/nut-js` run under Bun? | **Unknown at plan time; mitigated.** `@nut-tree/nut-js` is a native addon. If it doesn't load under Bun, the `computer-use-*` quickstarts will fall back to spawning `xdotool` / `osascript` via `Bun.$` for mouse/keyboard actions. Document this in the quickstart README. |
+| Q4 | Does `screenshot-desktop` run under Bun? | **Unknown at plan time; mitigated.** If the native binding fails, use `Bun.$`+`scrot` (Linux) or `Bun.$`+`screencapture` (macOS) as a fallback. Both are standard CLI tools. |
+| Q5 | Does `simple-git` run under Bun? | **Moot — removed.** Replaced with `Bun.$` template literals throughout. No npm package dependency for git operations. |
+| Q6 | What model name to use as default? | **`MiniMax-M2.7`** — set by the user. Connected via `ForgeConfig.openaiUrl = "https://api.minimax.io/v1"`. |
+| Q7 | Should `shared/` have a root `tsconfig.json` with project references? | **Yes, recommended.** Add a root `tsconfig.json` with `"references"` pointing to each workspace. Each workspace's `tsconfig.json` adds `"composite": true`. This lets `tsc --noEmit --build` typecheck the whole monorepo in one command from the root. |
 
 ---
 

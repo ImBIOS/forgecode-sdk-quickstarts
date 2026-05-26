@@ -1,8 +1,8 @@
 # AI Agents Coding Guidelines
 
-## Bun
+## Bun & PNPM
 
-Default to using Bun instead of Node.js.
+Default to using Bun as runtime instead of Node.js, and PNPM as package manager instead of npm or yarn or bun or deno.
 
 - Use `bun <file>` instead of `node <file>` or `ts-node <file>`
 - Use `bun test` instead of `jest` or `vitest`
